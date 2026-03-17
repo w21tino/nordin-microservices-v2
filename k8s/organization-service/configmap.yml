@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: organization-service-config
+  namespace: default
+  labels:
+    app: organization-service
+data:
+  DB_HOST: "org-db"
+  DB_PORT: "5432"
+  DB_NAME: "org_db"
+  ZIPKIN_HOST: "zipkin"
+  DEPARTMENT_SERVICE_URL: "http://department-service:8082"

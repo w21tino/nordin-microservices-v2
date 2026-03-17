@@ -1,0 +1,108 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      # ─── En K8s: los nombres se resuelven via CoreDNS ─────
+      # employee-service → employee-service.default.svc.cluster.local
+      # En local: usar variables de entorno con URLs directas
+      routes:
+        - id: auth-service
+          uri: ${AUTH_SERVICE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/auth/**
+          filters:
+            - StripPrefix=0
+
+        - id: organization-service
+          uri: ${ORG_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/organizations/**
+          filters:
+            - StripPrefix=0
+
+        - id: department-service
+          uri: ${DEPT_SERVICE_URL:http://localhost:8082}
+          predicates:
+            - Path=/api/departments/**
+          filters:
+            - StripPrefix=0
+
+        - id: employee-service
+          uri: ${EMP_SERVICE_URL:http://localhost:8083}
+          predicates:
+            - Path=/api/employees/**
+          filters:
+            - StripPrefix=0
+
+        # ─── Rutas Swagger agregado ───────────────────────
+        - id: auth-service-swagger
+          uri: ${AUTH_SERVICE_URL:http://localhost:8084}
+          predicates:
+            - Path=/aggregate/auth-service/**
+          filters:
+            - RewritePath=/aggregate/auth-service/(?<remaining>.*), /${remaining}
+
+        - id: organization-service-swagger
+          uri: ${ORG_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/aggregate/organization-service/**
+          filters:
+            - RewritePath=/aggregate/organization-service/(?<remaining>.*), /${remaining}
+
+        - id: department-service-swagger
+          uri: ${DEPT_SERVICE_URL:http://localhost:8082}
+          predicates:
+            - Path=/aggregate/department-service/**
+          filters:
+            - RewritePath=/aggregate/department-service/(?<remaining>.*), /${remaining}
+
+        - id: employee-service-swagger
+          uri: ${EMP_SERVICE_URL:http://localhost:8083}
+          predicates:
+            - Path=/aggregate/employee-service/**
+          filters:
+            - RewritePath=/aggregate/employee-service/(?<remaining>.*), /${remaining}
+
+jwt:
+  secret: ${JWT_SECRET:nordin-secret-key-para-desarrollo-minimo-256-bits}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,gateway
+  endpoint:
+    health:
+      show-details: always
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://${ZIPKIN_HOST:localhost}:9411/api/v2/spans
+
+springdoc:
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    urls:
+      - name: auth-service
+        url: /aggregate/auth-service/v3/api-docs
+      - name: organization-service
+        url: /aggregate/organization-service/v3/api-docs
+      - name: department-service
+        url: /aggregate/department-service/v3/api-docs
+      - name: employee-service
+        url: /aggregate/employee-service/v3/api-docs
+  api-docs:
+    enabled: true
+
+info:
+  app:
+    name: API Gateway
+    version: 2.0.0

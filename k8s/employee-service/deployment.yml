@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: employee-service
+  namespace: default
+  labels:
+    app: employee-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: employee-service
+  template:
+    metadata:
+      labels:
+        app: employee-service
+        # Label para que Promtail recoja los logs de este pod
+        logging: promtail
+    spec:
+      containers:
+        - name: employee-service
+          image: employee-service:latest
+          # En local con Kind usar Never, en ECR usar Always
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8083
+          envFrom:
+            # Variables no sensibles desde ConfigMap
+            - configMapRef:
+                name: employee-service-config
+            # Variables sensibles desde Secret
+            - secretRef:
+                name: employee-service-secret
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "prod"
+          # ─── Health checks ────────────────────────────────
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8083
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8083
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          # ─── Recursos ────────────────────────────────────
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

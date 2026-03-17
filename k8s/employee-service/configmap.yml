@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: employee-service-config
+  namespace: default
+  labels:
+    app: employee-service
+data:
+  DB_HOST: "emp-db"
+  DB_PORT: "5432"
+  DB_NAME: "emp_db"
+  ZIPKIN_HOST: "zipkin"

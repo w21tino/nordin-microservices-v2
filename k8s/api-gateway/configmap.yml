@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  namespace: default
+  labels:
+    app: api-gateway
+data:
+  ZIPKIN_HOST: "zipkin"
+  # CoreDNS resuelve los nombres de servicio automáticamente
+  AUTH_SERVICE_URL: "http://auth-service:8084"
+  ORG_SERVICE_URL: "http://organization-service:8081"
+  DEPT_SERVICE_URL: "http://department-service:8082"
+  EMP_SERVICE_URL: "http://employee-service:8083"

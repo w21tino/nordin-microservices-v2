@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: emp-db-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emp-db
+  namespace: default
+  labels:
+    app: emp-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: emp-db
+  template:
+    metadata:
+      labels:
+        app: emp-db
+    spec:
+      containers:
+        - name: emp-db
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "emp_db"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: employee-service-secret
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: employee-service-secret
+                  key: DB_PASS
+          volumeMounts:
+            - name: emp-db-storage
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "emp_user", "-d", "emp_db"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+      volumes:
+        - name: emp-db-storage
+          persistentVolumeClaim:
+            claimName: emp-db-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: emp-db
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    app: emp-db
+  ports:
+    - port: 5432
+      targetPort: 5432

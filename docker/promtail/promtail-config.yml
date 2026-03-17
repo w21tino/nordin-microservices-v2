@@ -1,0 +1,55 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # ─── Recoger logs de todos los contenedores Docker ───────────────────────
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          # Solo contenedores con label logging=promtail
+          # O quitar el filtro para recoger TODOS los contenedores
+          - name: label
+            values: ["logging=promtail"]
+    relabel_configs:
+      # Usar el nombre del contenedor como label "service"
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: service
+
+      # Agregar label del compose-service
+      - source_labels: ['__meta_docker_compose_service']
+        target_label: compose_service
+
+      # Agregar label del proyecto
+      - source_labels: ['__meta_docker_compose_project']
+        target_label: project
+
+    pipeline_stages:
+      # Parsear logs JSON de Spring Boot (perfil prod con logstash-logback-encoder)
+      - json:
+          expressions:
+            level: level
+            logger: logger_name
+            message: message
+            traceId: traceId
+            spanId: spanId
+            service: app_name
+
+      # Extraer el nivel de log como label para filtrar en Grafana
+      - labels:
+          level:
+          service:
+          traceId:
+
+      # Descartar logs de nivel DEBUG en producción (opcional)
+      # - drop:
+      #     expression: '.*level="DEBUG".*'

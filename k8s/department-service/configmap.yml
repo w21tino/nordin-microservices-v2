@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: department-service-config
+  namespace: default
+  labels:
+    app: department-service
+data:
+  DB_HOST: "dept-db"
+  DB_PORT: "5432"
+  DB_NAME: "dept_db"
+  ZIPKIN_HOST: "zipkin"
+  # CoreDNS resuelve employee-service por nombre de Service
+  EMPLOYEE_SERVICE_URL: "http://employee-service:8083"

@@ -1,0 +1,156 @@
+services:
+
+  # ─── Bases de datos ───────────────────────────────────────────────────────
+
+  org-db:
+    image: postgres:16-alpine
+    container_name: org-db
+    environment:
+      POSTGRES_DB: org_db
+      POSTGRES_USER: org_user
+      POSTGRES_PASSWORD: org_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - org-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U org_user -d org_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dept-db:
+    image: postgres:16-alpine
+    container_name: dept-db
+    environment:
+      POSTGRES_DB: dept_db
+      POSTGRES_USER: dept_user
+      POSTGRES_PASSWORD: dept_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - dept-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dept_user -d dept_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  emp-db:
+    image: postgres:16-alpine
+    container_name: emp-db
+    environment:
+      POSTGRES_DB: emp_db
+      POSTGRES_USER: emp_user
+      POSTGRES_PASSWORD: emp_pass
+    ports:
+      - "5434:5432"
+    volumes:
+      - emp-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U emp_user -d emp_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 🆕 Base de datos para auth-service (usuarios)
+  auth-db:
+    image: postgres:16-alpine
+    container_name: auth-db
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: auth_user
+      POSTGRES_PASSWORD: auth_pass
+    ports:
+      - "5435:5432"
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth_user -d auth_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 🆕 Redis — almacena refresh tokens con TTL
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Observabilidad ───────────────────────────────────────────────────────
+
+  zipkin:
+    image: openzipkin/zipkin:3
+    container_name: zipkin
+    ports:
+      - "9411:9411"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9411/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.enable-lifecycle'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+
+  # 🆕 Loki — agregador de logs
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+
+  # 🆕 Promtail — agente que recoge logs de Docker y los envía a Loki
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: promtail
+    volumes:
+      - /var/log:/var/log
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/promtail/promtail-config.yml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
+volumes:
+  org-db-data:
+  dept-db-data:
+  emp-db-data:
+  auth-db-data:
+  redis-data:
+  grafana-data:
+  loki-data:

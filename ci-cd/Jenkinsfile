@@ -1,0 +1,297 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Jenkinsfile — nordin-microservices-v2
+//
+// PIPELINE:
+//   Stage 1: Compilar + Tests        → mvn verify (con JaCoCo)
+//   Stage 2: SonarQube Analysis      → mvn sonar:sonar + Quality Gate
+//   Stage 3: Build Imágenes Docker   → docker build por servicio
+//   Stage 4: Push a ECR              → solo rama main
+//   Stage 5: Deploy en K8s (EKS)     → kubectl apply, sin tests
+//
+// CREDENCIALES REQUERIDAS EN JENKINS:
+//   - sonar-token        → Token de SonarQube (Secret Text)
+//   - aws-credentials    → AWS Access Key ID + Secret (AWS Credentials)
+//   - kubeconfig-eks     → kubeconfig de EKS (Secret File)
+//
+// VARIABLES DE ENTORNO A CONFIGURAR EN JENKINS:
+//   - AWS_ACCOUNT_ID    → ID de cuenta AWS (ej: 123456789012)
+//   - AWS_REGION        → Región de AWS (ej: us-east-1)
+//   - EKS_CLUSTER_NAME  → Nombre del cluster EKS
+// ─────────────────────────────────────────────────────────────────────────────
+
+pipeline {
+
+    agent any
+
+    // ─── Herramientas ─────────────────────────────────────────────────────────
+    tools {
+        maven 'Maven-3.9'
+        jdk 'JDK-21'
+    }
+
+    // ─── Variables globales ───────────────────────────────────────────────────
+    environment {
+        // Servicios del proyecto
+        SERVICES = 'auth-service employee-service department-service organization-service api-gateway admin-server'
+
+        // AWS / ECR
+        AWS_REGION      = "${env.AWS_REGION ?: 'us-east-1'}"
+        AWS_ACCOUNT_ID  = "${env.AWS_ACCOUNT_ID ?: ''}"
+        ECR_REGISTRY    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+        // SonarQube
+        SONAR_HOST_URL  = 'http://sonarqube:9000'
+
+        // Docker
+        IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'local'}"
+    }
+
+    // ─── Opciones del pipeline ────────────────────────────────────────────────
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 60, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STAGE 1 — Compilar + Tests
+        // ─────────────────────────────────────────────────────────────────────
+        stage('Compilar + Tests') {
+            steps {
+                echo "🔨 Compilando y ejecutando tests..."
+                sh 'mvn clean verify -B'
+            }
+            post {
+                always {
+                    // Publicar resultados de tests en Jenkins UI
+                    junit allowEmptyResults: true,
+                          testResults: '**/target/surefire-reports/*.xml'
+
+                    // Publicar reporte de cobertura JaCoCo
+                    jacoco(
+                        execPattern: '**/target/jacoco.exec',
+                        classPattern: '**/target/classes',
+                        sourcePattern: '**/src/main/java',
+                        exclusionPattern: '**/dto/**, **/model/**, **/*Application.class'
+                    )
+                }
+                failure {
+                    echo "❌ Tests fallaron — revisando reportes..."
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STAGE 2 — SonarQube Analysis
+        // ─────────────────────────────────────────────────────────────────────
+        stage('SonarQube Analysis') {
+            steps {
+                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                    echo "🔍 Ejecutando análisis de SonarQube..."
+                    sh """
+                        mvn sonar:sonar \
+                            -Dsonar.host.url=${SONAR_HOST_URL} \
+                            -Dsonar.token=${SONAR_TOKEN} \
+                            -Dsonar.projectKey=nordin-microservices-v2 \
+                            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+                            -B
+                    """
+                }
+            }
+            post {
+                always {
+                    // Esperar resultado del Quality Gate
+                    script {
+                        def qg = waitForQualityGate abortPipeline: false
+                        if (qg.status != 'OK') {
+                            error "❌ Quality Gate fallido: ${qg.status}"
+                        } else {
+                            echo "✅ Quality Gate aprobado"
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STAGE 3 — Build Imágenes Docker
+        // ─────────────────────────────────────────────────────────────────────
+        stage('Build Imágenes Docker') {
+            steps {
+                script {
+                    echo "🐳 Construyendo imágenes Docker..."
+
+                    def buildJobs = [:]
+
+                    // Servicios de negocio
+                    ['auth-service', 'employee-service',
+                     'department-service', 'organization-service'].each { svc ->
+                        buildJobs[svc] = {
+                            sh "docker build -t ${svc}:${IMAGE_TAG} -t ${svc}:latest services/${svc}/"
+                            echo "  ✓ ${svc}:${IMAGE_TAG}"
+                        }
+                    }
+
+                    // Infraestructura
+                    ['api-gateway', 'admin-server'].each { svc ->
+                        buildJobs[svc] = {
+                            sh "docker build -t ${svc}:${IMAGE_TAG} -t ${svc}:latest infrastructure/${svc}/"
+                            echo "  ✓ ${svc}:${IMAGE_TAG}"
+                        }
+                    }
+
+                    // Construir en paralelo
+                    parallel buildJobs
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STAGE 4 — Push a ECR
+        // Solo se ejecuta en rama main
+        // ─────────────────────────────────────────────────────────────────────
+        stage('Push a ECR') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        echo "📦 Autenticando con ECR..."
+                        sh """
+                            aws ecr get-login-password --region ${AWS_REGION} | \
+                            docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                        """
+
+                        def allServices = [
+                            'auth-service', 'employee-service', 'department-service',
+                            'organization-service', 'api-gateway', 'admin-server'
+                        ]
+
+                        allServices.each { svc ->
+                            echo "  📤 Push: ${svc}"
+
+                            // Crear repositorio ECR si no existe
+                            sh """
+                                aws ecr describe-repositories \
+                                    --repository-names nordin/${svc} \
+                                    --region ${AWS_REGION} || \
+                                aws ecr create-repository \
+                                    --repository-name nordin/${svc} \
+                                    --region ${AWS_REGION}
+                            """
+
+                            // Tag y push
+                            sh """
+                                docker tag ${svc}:${IMAGE_TAG} ${ECR_REGISTRY}/nordin/${svc}:${IMAGE_TAG}
+                                docker tag ${svc}:${IMAGE_TAG} ${ECR_REGISTRY}/nordin/${svc}:latest
+                                docker push ${ECR_REGISTRY}/nordin/${svc}:${IMAGE_TAG}
+                                docker push ${ECR_REGISTRY}/nordin/${svc}:latest
+                            """
+                            echo "  ✓ ${ECR_REGISTRY}/nordin/${svc}:${IMAGE_TAG}"
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STAGE 5 — Deploy en EKS
+        // Solo rama main — sin tests (ya pasaron en stage 1)
+        // ─────────────────────────────────────────────────────────────────────
+        stage('Deploy en EKS') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    withCredentials([
+                        file(credentialsId: 'kubeconfig-eks', variable: 'KUBECONFIG'),
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: 'aws-credentials',
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]
+                    ]) {
+                        echo "🚀 Desplegando en EKS..."
+
+                        // Actualizar imagen en cada deployment con el tag del build
+                        def deployments = [
+                            'auth-service'         : 'auth-service',
+                            'employee-service'     : 'employee-service',
+                            'department-service'   : 'department-service',
+                            'organization-service' : 'organization-service',
+                            'api-gateway'          : 'api-gateway',
+                            'admin-server'         : 'admin-server'
+                        ]
+
+                        deployments.each { deployment, svc ->
+                            sh """
+                                kubectl set image deployment/${deployment} \
+                                    ${deployment}=${ECR_REGISTRY}/nordin/${svc}:${IMAGE_TAG} \
+                                    --kubeconfig=${KUBECONFIG}
+                            """
+                            echo "  ✓ ${deployment} → imagen: ${IMAGE_TAG}"
+                        }
+
+                        // Esperar que todos los deployments estén ready
+                        echo "⏳ Esperando rollout..."
+                        deployments.keySet().each { deployment ->
+                            sh """
+                                kubectl rollout status deployment/${deployment} \
+                                    --timeout=300s \
+                                    --kubeconfig=${KUBECONFIG}
+                            """
+                        }
+
+                        echo "✅ Deploy completado en EKS"
+                    }
+                }
+            }
+            post {
+                failure {
+                    // Rollback automático si el deploy falla
+                    script {
+                        withCredentials([file(credentialsId: 'kubeconfig-eks', variable: 'KUBECONFIG')]) {
+                            echo "⚠️ Deploy fallido — ejecutando rollback..."
+                            ['auth-service', 'employee-service', 'department-service',
+                             'organization-service', 'api-gateway', 'admin-server'].each { deployment ->
+                                sh "kubectl rollout undo deployment/${deployment} --kubeconfig=${KUBECONFIG} || true"
+                            }
+                            echo "🔄 Rollback completado"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ─── Post pipeline ────────────────────────────────────────────────────────
+    post {
+        success {
+            echo """
+            ════════════════════════════════════════
+            ✅ Pipeline completado exitosamente
+            ════════════════════════════════════════
+            Branch:  ${env.BRANCH_NAME}
+            Build:   ${env.BUILD_NUMBER}
+            Tag:     ${IMAGE_TAG}
+            """
+        }
+        failure {
+            echo "❌ Pipeline fallido — revisar logs"
+        }
+        always {
+            // Limpiar imágenes Docker locales para no llenar el disco
+            sh "docker image prune -f || true"
+        }
+    }
+}

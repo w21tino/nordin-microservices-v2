@@ -8,12 +8,10 @@ pipeline {
     }
 
     environment {
-        SERVICES = 'auth-service employee-service department-service organization-service api-gateway admin-server'
-        AWS_REGION      = "${env.AWS_REGION ?: 'us-east-1'}"
-        AWS_ACCOUNT_ID  = "${env.AWS_ACCOUNT_ID ?: ''}"
-        ECR_REGISTRY    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        SONAR_HOST_URL  = 'http://sonarqube:9000'
-        IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'local'}"
+        AWS_REGION     = "${env.AWS_REGION ?: 'us-east-1'}"
+        AWS_ACCOUNT_ID = "${env.AWS_ACCOUNT_ID ?: ''}"
+        ECR_REGISTRY   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        IMAGE_TAG      = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'local'}"
     }
 
     options {
@@ -37,32 +35,33 @@ pipeline {
                     )
                 }
                 failure {
-                    echo "❌ Tests fallaron — revisando reportes..."
+                    echo "❌ Tests fallaron"
                 }
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                    echo "🔍 Ejecutando análisis de SonarQube..."
-                    sh """
-                        mvn sonar:sonar \
-                            -Dsonar.host.url=${SONAR_HOST_URL} \
-                            -Dsonar.token=${SONAR_TOKEN} \
-                            -Dsonar.projectKey=nordin-microservices-v2 \
-                            -B
-                    """
+                withSonarQubeEnv('SonarQube') {
+                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                        echo "🔍 Ejecutando análisis de SonarQube..."
+                        sh """
+                            mvn sonar:sonar \
+                                -Dsonar.token=${SONAR_TOKEN} \
+                                -Dsonar.projectKey=nordin-microservices-v2 \
+                                -B
+                        """
+                    }
                 }
             }
             post {
                 always {
                     script {
-                        def qg = waitForQualityGate abortPipeline: false
-                        if (qg.status != 'OK') {
-                            echo "⚠️ Quality Gate: ${qg.status} — continuando de todas formas"
-                        } else {
-                            echo "✅ Quality Gate aprobado"
+                        try {
+                            def qg = waitForQualityGate abortPipeline: false
+                            echo "Quality Gate: ${qg.status}"
+                        } catch (err) {
+                            echo "⚠️ Quality Gate no disponible: ${err.message}"
                         }
                     }
                 }
@@ -77,16 +76,18 @@ pipeline {
 
                     ['auth-service', 'employee-service',
                      'department-service', 'organization-service'].each { svc ->
-                        buildJobs[svc] = {
-                            sh "docker build -t ${svc}:${IMAGE_TAG} -t ${svc}:latest services/${svc}/"
-                            echo "  ✓ ${svc}:${IMAGE_TAG}"
+                        def s = svc
+                        buildJobs[s] = {
+                            sh "docker build -t ${s}:${IMAGE_TAG} -t ${s}:latest services/${s}/"
+                            echo "  ✓ ${s}:${IMAGE_TAG}"
                         }
                     }
 
                     ['api-gateway', 'admin-server'].each { svc ->
-                        buildJobs[svc] = {
-                            sh "docker build -t ${svc}:${IMAGE_TAG} -t ${svc}:latest infrastructure/${svc}/"
-                            echo "  ✓ ${svc}:${IMAGE_TAG}"
+                        def s = svc
+                        buildJobs[s] = {
+                            sh "docker build -t ${s}:${IMAGE_TAG} -t ${s}:latest infrastructure/${s}/"
+                            echo "  ✓ ${s}:${IMAGE_TAG}"
                         }
                     }
 
@@ -99,7 +100,7 @@ pipeline {
             when { branch 'main' }
             steps {
                 script {
-                    if (!AWS_ACCOUNT_ID) {
+                    if (!env.AWS_ACCOUNT_ID) {
                         echo "⏭️ AWS_ACCOUNT_ID no configurado — saltando Push a ECR"
                         return
                     }
@@ -129,11 +130,7 @@ pipeline {
     post {
         success {
             echo """
-            ════════════════════════════════════════
-            ✅ Pipeline completado exitosamente
-            ════════════════════════════════════════
-            Build: ${env.BUILD_NUMBER}
-            Tag:   ${IMAGE_TAG}
+            ✅ Pipeline completado — Build: ${env.BUILD_NUMBER} — Tag: ${IMAGE_TAG}
             """
         }
         failure {

@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>auth-service</artifactId>
-    <n>auth-service</n>
+    <name>auth-service</name>
     <description>Servicio de autenticación — JWT + Refresh Token + Revocación via Redis</description>
 
     <dependencies>

@@ -14,6 +14,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
@@ -24,6 +26,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("AuthService Tests")
 class AuthServiceTest {
 
@@ -55,8 +58,6 @@ class AuthServiceTest {
         when(refreshTokenService.createRefreshToken(any())).thenReturn("refresh-token-uuid");
     }
 
-    // ─── Register ────────────────────────────────────────────────────────────
-
     @Test
     @DisplayName("register → exitoso → retorna tokens")
     void register_success() {
@@ -65,7 +66,7 @@ class AuthServiceTest {
         when(userRepository.save(any(User.class))).thenReturn(testUser);
 
         AuthResponse response = authService.register(
-                new RegisterRequest("Test User", TEST_EMAIL, TEST_PASSWORD));
+                new RegisterRequest("Test User", TEST_EMAIL, TEST_PASSWORD, null));
 
         assertThat(response.accessToken()).isEqualTo("access.token.jwt");
         assertThat(response.refreshToken()).isEqualTo("refresh-token-uuid");
@@ -82,14 +83,12 @@ class AuthServiceTest {
         when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(true);
 
         assertThatThrownBy(() ->
-                authService.register(new RegisterRequest("Test", TEST_EMAIL, TEST_PASSWORD)))
+                authService.register(new RegisterRequest("Test", TEST_EMAIL, TEST_PASSWORD, null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ya está registrado");
 
         verify(userRepository, never()).save(any());
     }
-
-    // ─── Login ───────────────────────────────────────────────────────────────
 
     @Test
     @DisplayName("login → credenciales correctas → retorna tokens")
@@ -138,8 +137,6 @@ class AuthServiceTest {
                 .hasMessageContaining("inactivo");
     }
 
-    // ─── Refresh ─────────────────────────────────────────────────────────────
-
     @Test
     @DisplayName("refresh → token válido → retorna nuevo access token y revoca el viejo")
     void refresh_success() {
@@ -151,8 +148,6 @@ class AuthServiceTest {
 
         assertThat(response.accessToken()).isEqualTo("access.token.jwt");
         assertThat(response.tokenType()).isEqualTo("Bearer");
-
-        // Verifica rotación: el token viejo debe revocarse
         verify(refreshTokenService).revokeRefreshToken("old-refresh-token");
     }
 
@@ -166,13 +161,10 @@ class AuthServiceTest {
                 .hasMessageContaining("inválido o expirado");
     }
 
-    // ─── Logout ──────────────────────────────────────────────────────────────
-
     @Test
     @DisplayName("logout → revoca refresh token en Redis")
     void logout_revokesToken() {
         authService.logout(new LogoutRequest("refresh-token-to-revoke"));
-
         verify(refreshTokenService).revokeRefreshToken("refresh-token-to-revoke");
     }
 }

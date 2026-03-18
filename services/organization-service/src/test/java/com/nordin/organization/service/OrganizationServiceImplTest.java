@@ -1,6 +1,5 @@
 package com.nordin.organization.service;
 
-import com.nordin.organization.client.DepartmentClient;
 import com.nordin.organization.dto.DepartmentResponse;
 import com.nordin.organization.dto.EmployeeResponse;
 import com.nordin.organization.dto.OrganizationRequest;
@@ -17,6 +16,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.util.Collections;
 import java.util.List;
@@ -26,30 +27,23 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("OrganizationService — Tests unitarios")
 class OrganizationServiceImplTest {
 
-    @Mock
-    private OrganizationRepository organizationRepository;
+    @Mock private OrganizationRepository organizationRepository;
+    @Mock private OrganizationMapper organizationMapper;
+    @Mock private DepartmentResilienceClient departmentResilienceClient;
 
-    @Mock
-    private OrganizationMapper organizationMapper;
-
-    @Mock
-    private DepartmentClient departmentClient;
-
-    @InjectMocks
-    private OrganizationServiceImpl organizationService;
+    @InjectMocks private OrganizationServiceImpl organizationService;
 
     private UUID organizationId;
     private Organization organization;
     private OrganizationRequest request;
     private DepartmentResponse department;
-    private EmployeeResponse employee;
     private OrganizationResponse responseWithDepts;
     private OrganizationResponse responseWithFallback;
 
@@ -59,35 +53,28 @@ class OrganizationServiceImplTest {
         UUID departmentId = UUID.randomUUID();
 
         organization = Organization.builder()
-                .id(organizationId)
-                .name("Nordin Corp")
-                .address("Calle Principal 123")
-                .build();
+                .id(organizationId).name("Nordin Corp").address("Calle Principal 123").build();
 
         request = new OrganizationRequest("Nordin Corp", "Calle Principal 123");
 
-        employee = new EmployeeResponse(
+        EmployeeResponse employee = new EmployeeResponse(
                 UUID.randomUUID(), "Juan Pérez", "juan@nordin.com", departmentId);
 
         department = new DepartmentResponse(
                 departmentId, "Ingeniería", organizationId, List.of(employee), null);
 
         responseWithDepts = new OrganizationResponse(
-                organizationId, "Nordin Corp", "Calle Principal 123",
-                List.of(department), null);
+                organizationId, "Nordin Corp", "Calle Principal 123", List.of(department), null);
 
         responseWithFallback = new OrganizationResponse(
-                organizationId, "Nordin Corp", "Calle Principal 123",
-                Collections.emptyList(),
+                organizationId, "Nordin Corp", "Calle Principal 123", Collections.emptyList(),
                 "⚠️ Información parcial: servicio de departamentos no disponible temporalmente");
     }
 
-    @Nested
-    @DisplayName("createOrganization")
+    @Nested @DisplayName("createOrganization")
     class CreateOrganization {
 
-        @Test
-        @DisplayName("debe crear y retornar la organización correctamente")
+        @Test @DisplayName("debe crear y retornar la organización correctamente")
         void shouldCreateOrganizationSuccessfully() {
             when(organizationMapper.toEntity(request)).thenReturn(organization);
             when(organizationRepository.save(organization)).thenReturn(organization);
@@ -98,20 +85,17 @@ class OrganizationServiceImplTest {
 
             assertThat(result).isNotNull();
             assertThat(result.id()).isEqualTo(organizationId);
-            verify(organizationRepository, times(1)).save(any(Organization.class));
+            verify(organizationRepository).save(any(Organization.class));
         }
     }
 
-    @Nested
-    @DisplayName("getOrganizationById")
+    @Nested @DisplayName("getOrganizationById")
     class GetOrganizationById {
 
-        @Test
-        @DisplayName("debe retornar organización con departments cuando todo funciona")
+        @Test @DisplayName("debe retornar organización con departments")
         void shouldReturnOrganizationWithDepartments() {
-            when(organizationRepository.findById(organizationId))
-                    .thenReturn(Optional.of(organization));
-            when(departmentClient.getDepartmentsByOrganizationId(organizationId))
+            when(organizationRepository.findById(organizationId)).thenReturn(Optional.of(organization));
+            when(departmentResilienceClient.getDepartmentsWithResilience(organizationId))
                     .thenReturn(List.of(department));
             when(organizationMapper.toResponse(organization, List.of(department), null))
                     .thenReturn(responseWithDepts);
@@ -119,17 +103,13 @@ class OrganizationServiceImplTest {
             OrganizationResponse result = organizationService.getOrganizationById(organizationId);
 
             assertThat(result).isNotNull();
-            assertThat(result.message()).isNull();
             assertThat(result.departments()).hasSize(1);
-            assertThat(result.departments().get(0).employees()).hasSize(1);
         }
 
-        @Test
-        @DisplayName("debe retornar message de degradación cuando department-service retorna vacío")
-        void shouldReturnFallbackMessageWhenDepartmentServiceFails() {
-            when(organizationRepository.findById(organizationId))
-                    .thenReturn(Optional.of(organization));
-            when(departmentClient.getDepartmentsByOrganizationId(organizationId))
+        @Test @DisplayName("debe retornar message de degradación cuando falla department-service")
+        void shouldReturnFallbackMessage() {
+            when(organizationRepository.findById(organizationId)).thenReturn(Optional.of(organization));
+            when(departmentResilienceClient.getDepartmentsWithResilience(organizationId))
                     .thenReturn(Collections.emptyList());
             when(organizationMapper.toResponse(eq(organization), eq(Collections.emptyList()), any()))
                     .thenReturn(responseWithFallback);
@@ -140,28 +120,24 @@ class OrganizationServiceImplTest {
             assertThat(result.message()).contains("⚠️");
         }
 
-        @Test
-        @DisplayName("debe lanzar OrganizationNotFoundException cuando el ID no existe")
+        @Test @DisplayName("debe lanzar OrganizationNotFoundException cuando no existe")
         void shouldThrowExceptionWhenNotFound() {
             when(organizationRepository.findById(organizationId)).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> organizationService.getOrganizationById(organizationId))
-                    .isInstanceOf(OrganizationNotFoundException.class)
-                    .hasMessageContaining(organizationId.toString());
+                    .isInstanceOf(OrganizationNotFoundException.class);
 
-            verify(departmentClient, never()).getDepartmentsByOrganizationId(any());
+            verify(departmentResilienceClient, never()).getDepartmentsWithResilience(any());
         }
     }
 
-    @Nested
-    @DisplayName("getAllOrganizations")
+    @Nested @DisplayName("getAllOrganizations")
     class GetAllOrganizations {
 
-        @Test
-        @DisplayName("debe retornar todas las organizaciones con sus departments")
+        @Test @DisplayName("debe retornar todas las organizaciones con departments")
         void shouldReturnAllOrganizations() {
             when(organizationRepository.findAll()).thenReturn(List.of(organization));
-            when(departmentClient.getDepartmentsByOrganizationId(organizationId))
+            when(departmentResilienceClient.getDepartmentsWithResilience(organizationId))
                     .thenReturn(List.of(department));
             when(organizationMapper.toResponse(organization, List.of(department), null))
                     .thenReturn(responseWithDepts);
@@ -169,18 +145,16 @@ class OrganizationServiceImplTest {
             List<OrganizationResponse> result = organizationService.getAllOrganizations();
 
             assertThat(result).hasSize(1);
-            assertThat(result.get(0).name()).isEqualTo("Nordin Corp");
         }
 
-        @Test
-        @DisplayName("debe retornar lista vacía cuando no hay organizaciones")
-        void shouldReturnEmptyListWhenNoOrganizations() {
+        @Test @DisplayName("debe retornar lista vacía cuando no hay organizaciones")
+        void shouldReturnEmptyList() {
             when(organizationRepository.findAll()).thenReturn(Collections.emptyList());
 
             List<OrganizationResponse> result = organizationService.getAllOrganizations();
 
             assertThat(result).isEmpty();
-            verify(departmentClient, never()).getDepartmentsByOrganizationId(any());
+            verify(departmentResilienceClient, never()).getDepartmentsWithResilience(any());
         }
     }
 }

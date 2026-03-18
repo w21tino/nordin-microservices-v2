@@ -19,6 +19,7 @@ import java.util.UUID;
  */
 @FeignClient(
         name = "department-service",
+        url = "${DEPARTMENT_SERVICE_URL:http://localhost:8082}",
         fallback = DepartmentClientFallback.class
 )
 public interface DepartmentClient {

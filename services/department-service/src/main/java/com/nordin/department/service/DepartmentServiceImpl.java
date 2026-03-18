@@ -49,7 +49,7 @@ public class DepartmentServiceImpl implements DepartmentService {
     private final DepartmentRepository departmentRepository;
     private final DepartmentMapper departmentMapper;
     private final EmployeeClient employeeClient;
-
+    private final EmployeeResilienceClient employeeResilienceClient;
     @Override
     @Transactional
     public DepartmentResponse createDepartment(DepartmentRequest request) {
@@ -70,7 +70,7 @@ public class DepartmentServiceImpl implements DepartmentService {
         return departmentRepository.findAll()
                 .stream()
                 .map(dept -> {
-                    List<EmployeeResponse> employees = getEmployeesWithResilience(dept.getId());
+                    List<EmployeeResponse> employees =employeeResilienceClient.getEmployeesWithResilience(dept.getId());
                     String message = employees.isEmpty() ? FALLBACK_MESSAGE : null;
                     return departmentMapper.toResponse(dept, employees, message);
                 })
@@ -85,7 +85,7 @@ public class DepartmentServiceImpl implements DepartmentService {
         Department department = departmentRepository.findById(id)
                 .orElseThrow(() -> new DepartmentNotFoundException(id));
 
-        List<EmployeeResponse> employees = getEmployeesWithResilience(id);
+        List<EmployeeResponse> employees = employeeResilienceClient.getEmployeesWithResilience(id);
         String message = employees.isEmpty() ? FALLBACK_MESSAGE : null;
 
         return departmentMapper.toResponse(department, employees, message);
@@ -99,37 +99,12 @@ public class DepartmentServiceImpl implements DepartmentService {
         return departmentRepository.findByOrganizationId(organizationId)
                 .stream()
                 .map(dept -> {
-                    List<EmployeeResponse> employees = getEmployeesWithResilience(dept.getId());
+                    List<EmployeeResponse> employees = employeeResilienceClient.getEmployeesWithResilience(dept.getId());
                     String message = employees.isEmpty() ? FALLBACK_MESSAGE : null;
                     return departmentMapper.toResponse(dept, employees, message);
                 })
                 .toList();
     }
 
-    /**
-     * Llamada a employee-service con Circuit Breaker + Retry.
-     *
-     * @CircuitBreaker: si falla, llama a employeesFallback.
-     * @Retry: reintenta hasta 3 veces antes de activar el Circuit Breaker.
-     *
-     * El nombre "employee-service" debe coincidir con la configuración
-     * en application.yml bajo resilience4j.circuitbreaker.instances.
-     */
-    @CircuitBreaker(name = EMPLOYEE_SERVICE, fallbackMethod = "employeesFallback")
-    @Retry(name = EMPLOYEE_SERVICE)
-    public List<EmployeeResponse> getEmployeesWithResilience(UUID departmentId) {
-        log.debug("Llamando a employee-service para departamento: {}", departmentId);
-        return employeeClient.getEmployeesByDepartmentId(departmentId);
-    }
 
-    /**
-     * Fallback del Circuit Breaker.
-     * Se activa cuando employee-service no está disponible.
-     * Retorna lista vacía — el service pueblo el mensaje de degradación.
-     */
-    public List<EmployeeResponse> employeesFallback(UUID departmentId, Exception ex) {
-        log.warn("⚠️ Circuit Breaker activado para departamento: {} — Causa: {}",
-                departmentId, ex.getMessage());
-        return Collections.emptyList();
-    }
 }

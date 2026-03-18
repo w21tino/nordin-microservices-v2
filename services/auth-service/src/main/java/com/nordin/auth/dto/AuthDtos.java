@@ -1,10 +1,9 @@
 package com.nordin.auth.dto;
 
+import com.nordin.auth.model.Role;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
-
-// ─── Request DTOs ─────────────────────────────────────────────────────────────
 
 public class AuthDtos {
 
@@ -18,7 +17,9 @@ public class AuthDtos {
 
         @NotBlank(message = "La contraseña es requerida")
         @Size(min = 8, message = "La contraseña debe tener al menos 8 caracteres")
-        String password
+        String password,
+
+        Role role
     ) {}
 
     public record LoginRequest(
@@ -39,8 +40,6 @@ public class AuthDtos {
         @NotBlank(message = "El refresh token es requerido")
         String refreshToken
     ) {}
-
-    // ─── Response DTOs ─────────────────────────────────────────────────────────
 
     public record AuthResponse(
         String accessToken,
@@ -71,6 +70,5 @@ public class AuthDtos {
         String email,
         String role
     ) {}
-
     public record MessageResponse(String message) {}
 }

@@ -10,13 +10,12 @@ pipeline {
     environment {
         AWS_REGION     = "${env.AWS_REGION ?: 'us-east-1'}"
         AWS_ACCOUNT_ID = "${env.AWS_ACCOUNT_ID ?: ''}"
-        ECR_REGISTRY   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         IMAGE_TAG      = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'local'}"
     }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 60, unit: 'MINUTES')
+        timeout(time: 90, unit: 'MINUTES')
         disableConcurrentBuilds()
     }
 
@@ -68,70 +67,46 @@ pipeline {
             }
         }
 
-        stage('Build Imágenes Docker') {
+        stage('Build auth-service') {
             steps {
-                script {
-                    echo "🐳 Construyendo imágenes Docker..."
-                    def buildJobs = [:]
-
-                    ['auth-service', 'employee-service',
-                     'department-service', 'organization-service'].each { svc ->
-                        def s = svc
-                        buildJobs[s] = {
-                            sh "docker build -t ${s}:${IMAGE_TAG} -t ${s}:latest services/${s}/"
-                            echo "  ✓ ${s}:${IMAGE_TAG}"
-                        }
-                    }
-
-                    ['api-gateway', 'admin-server'].each { svc ->
-                        def s = svc
-                        buildJobs[s] = {
-                            sh "docker build -t ${s}:${IMAGE_TAG} -t ${s}:latest infrastructure/${s}/"
-                            echo "  ✓ ${s}:${IMAGE_TAG}"
-                        }
-                    }
-
-                    parallel buildJobs
-                }
+                sh "docker build -t auth-service:${IMAGE_TAG} -t auth-service:latest services/auth-service/"
             }
         }
 
-        stage('Push a ECR') {
-            when { branch 'main' }
+        stage('Build organization-service') {
             steps {
-                script {
-                    if (!env.AWS_ACCOUNT_ID) {
-                        echo "⏭️ AWS_ACCOUNT_ID no configurado — saltando Push a ECR"
-                        return
-                    }
-                    withCredentials([[
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-credentials',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]]) {
-                        sh """
-                            aws ecr get-login-password --region ${AWS_REGION} | \
-                            docker login --username AWS --password-stdin ${ECR_REGISTRY}
-                        """
-                        ['auth-service', 'employee-service', 'department-service',
-                         'organization-service', 'api-gateway', 'admin-server'].each { svc ->
-                            sh """
-                                docker tag ${svc}:${IMAGE_TAG} ${ECR_REGISTRY}/nordin/${svc}:${IMAGE_TAG}
-                                docker push ${ECR_REGISTRY}/nordin/${svc}:${IMAGE_TAG}
-                            """
-                        }
-                    }
-                }
+                sh "docker build -t organization-service:${IMAGE_TAG} -t organization-service:latest services/organization-service/"
+            }
+        }
+
+        stage('Build department-service') {
+            steps {
+                sh "docker build -t department-service:${IMAGE_TAG} -t department-service:latest services/department-service/"
+            }
+        }
+
+        stage('Build employee-service') {
+            steps {
+                sh "docker build -t employee-service:${IMAGE_TAG} -t employee-service:latest services/employee-service/"
+            }
+        }
+
+        stage('Build api-gateway') {
+            steps {
+                sh "docker build -t api-gateway:${IMAGE_TAG} -t api-gateway:latest infrastructure/api-gateway/"
+            }
+        }
+
+        stage('Build admin-server') {
+            steps {
+                sh "docker build -t admin-server:${IMAGE_TAG} -t admin-server:latest infrastructure/admin-server/"
             }
         }
     }
 
     post {
         success {
-            echo """
-            ✅ Pipeline completado — Build: ${env.BUILD_NUMBER} — Tag: ${IMAGE_TAG}
-            """
+            echo "✅ Pipeline completado — Build: ${env.BUILD_NUMBER} — Tag: ${IMAGE_TAG}"
         }
         failure {
             echo "❌ Pipeline fallido — revisar logs"

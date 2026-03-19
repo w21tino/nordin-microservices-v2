@@ -48,7 +48,7 @@ nodes:
         protocol: TCP
       # Grafana
       - containerPort: 30300
-        hostPort: 3000
+        hostPort: 3001
         protocol: TCP
 EOF
 
